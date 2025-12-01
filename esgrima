@@ -1,0 +1,341 @@
+#include <LiquidCrystal.h>
+
+// ===================== CONFIGURAÇÃO DE HARDWARE =====================
+
+// --- Ecrã LCD ---
+// Ligação: RS=12, E=11, D4=5, D5=4, D6=3, D7=2
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+
+// --- Joystick ---
+const int joyXPin = A0;      // Esquerda/Direita
+const int joyYPin = A1;      // Cima/Baixo
+const int joySwitch = 7;     // Botão de Sair/Enter (Pino Digital 7)
+
+// --- Som ---
+const int speakerPin = 10;   // Altifalante + Resistência
+
+// --- JOGO: 3 Botões e 3 LEDs ---
+// LEDs ligados nas portas Analógicas usadas como digitais
+const int ledPins[] = {A2, A3, A4};   // LED Esq, Centro, Dir
+const int btnPins[] = {6, 8, 9};      // Botão Esq, Centro, Dir
+const int numTargets = 3;
+
+// ===================== VARIÁVEIS DO JOGO =====================
+
+int totalRounds = 10;         // Pode ser alterado no menu
+int gameState = 0;            // 0=Menu, 1=Prep, 2=Ação, 3=Result, 4=Fim, 5=Recorde
+int menuOption = 0;           // 0=Jogar, 1=Config, 2=Recorde
+int lastMenuOption = -1;      // Para controlar atualização do ecrã
+int currentRound = 1;
+unsigned long startTime;
+unsigned long reactionTime;
+int roundScore = 0;
+long totalGameScore = 0;
+long highScore = 0;
+unsigned long lastNavTime = 0;
+int currentTarget = 0;        // Qual o LED que acendeu
+
+// --- Ícones Personalizados (Pixel Art) ---
+byte iconSword[8]  = {B00100, B00100, B00100, B01110, B01110, B00100, B01110, B00100};
+byte iconTrophy[8] = {B11111, B10001, B10001, B01010, B00100, B00100, B01110, B00000};
+byte iconSelect[8] = {B10000, B11000, B11100, B11110, B11100, B11000, B10000, B00000};
+byte iconClock[8]  = {B00000, B01110, B10101, B10101, B10111, B10001, B01110, B00000};
+
+// ===================== PROTÓTIPOS DAS FUNÇÕES =====================
+// (Isto ensina ao Arduino que estas funções existem lá em baixo)
+void handleMenu();
+void startNewGame();
+void showHighScore();
+void runEnGarde();
+void checkReflexes();
+void processRoundResult(boolean success);
+void introAnimation();
+void drawMenu();
+void cancelGame();
+void gameOver();
+
+// ===================== SETUP (Início) =====================
+void setup() {
+  lcd.begin(16, 2);
+  
+  // Configurar Pinos
+  pinMode(joySwitch, INPUT_PULLUP);
+  pinMode(speakerPin, OUTPUT);
+  
+  for(int i=0; i<numTargets; i++) {
+    pinMode(ledPins[i], OUTPUT);
+    pinMode(btnPins[i], INPUT_PULLUP);
+  }
+
+  // Semente Aleatória
+  randomSeed(analogRead(A5));
+
+  // Criar Ícones
+  lcd.createChar(0, iconSword);  
+  lcd.createChar(1, iconTrophy); 
+  lcd.createChar(2, iconSelect); 
+  lcd.createChar(3, iconClock);
+
+  // Animação Inicial
+  introAnimation(); 
+  drawMenu();       
+}
+
+// ===================== LOOP PRINCIPAL =====================
+void loop() {
+  
+  // --- ESTADO 0: MENU ---
+  if (gameState == 0) {
+    handleMenu();
+  }
+  
+  // --- ESTADO 1: PREPARAÇÃO (En Garde) ---
+  else if (gameState == 1) {
+    runEnGarde();
+  }
+  
+  // --- ESTADO 2: JOGO (Reflexos) ---
+  else if (gameState == 2) {
+    checkReflexes();
+  }
+  
+  // --- ESTADO 3: RESULTADO DA RONDA ---
+  else if (gameState == 3) {
+    delay(800); // Pausa rápida entre rondas
+    
+    // Apagar LEDs
+    for(int i=0; i<numTargets; i++) digitalWrite(ledPins[i], LOW);
+    
+    if (currentRound < totalRounds) {
+      currentRound++;
+      gameState = 1; // Volta ao En Garde
+    } else {
+      gameOver();    // Acabou o jogo
+    }
+  }
+  
+  // --- ESTADO 4 & 5: FIM DE JOGO / RECORDE ---
+  else if (gameState == 4 || gameState == 5) { 
+    // Sair com botão central ou qualquer botão de jogo
+    if (digitalRead(joySwitch) == LOW || digitalRead(btnPins[1]) == LOW) {
+      gameState = 0;
+      menuOption = 0;
+      lastMenuOption = -1; 
+      tone(speakerPin, 600, 100);
+      drawMenu();
+      delay(500);
+    }
+  }
+}
+
+// ===================== FUNÇÕES DO JOGO =====================
+
+void startNewGame() {
+  currentRound = 1; 
+  totalGameScore = 0; 
+  gameState = 1;
+  lcd.clear(); 
+  lcd.setCursor(3,0); lcd.print("PREPARAR");
+  lcd.setCursor(4,1); lcd.print("COMBATE!"); 
+  delay(1000);
+}
+
+void runEnGarde() {
+  lcd.clear();
+  lcd.print("Rnd "); lcd.print(currentRound);
+  lcd.print("/"); lcd.print(totalRounds);
+  lcd.setCursor(9, 0); lcd.print("Pts:"); lcd.print(totalGameScore);
+  lcd.setCursor(0, 1); lcd.print("EN GARDE...");
+  
+  // Garantir que LEDs estão apagados
+  for(int i=0; i<numTargets; i++) digitalWrite(ledPins[i], LOW);
+
+  // Segurança: Esperar que larguem os botões antes de começar
+  boolean buttonsFree = false;
+  while(!buttonsFree) {
+    buttonsFree = true;
+    for(int i=0; i<numTargets; i++) { 
+      if(digitalRead(btnPins[i]) == LOW) buttonsFree = false; 
+    }
+    delay(10);
+  }
+  delay(200); 
+
+  // Tempo aleatório de espera
+  int randomDelay = random(800, 3000); 
+  unsigned long delayStart = millis();
+  
+  while(millis() - delayStart < randomDelay) {
+    // 1. Verificar Batota (Falsa Partida)
+    for(int i=0; i<numTargets; i++) {
+      if (digitalRead(btnPins[i]) == LOW) { 
+        tone(speakerPin, 100, 400); 
+        lcd.setCursor(0, 1); lcd.print("  FALTA! -500   ");
+        totalGameScore -= 500; 
+        delay(1500); return; // Reinicia a ronda
+      }
+    }
+    // 2. Verificar Cancelamento (Joystick Click)
+    if (digitalRead(joySwitch) == LOW) { cancelGame(); return; }
+  }
+  
+  // --- ACENDER O ALVO! ---
+  gameState = 2;
+  currentTarget = random(0, 3); // 0, 1 ou 2
+  
+  lcd.setCursor(0, 1);
+  if(currentTarget == 0) lcd.print("ESQUERDA! <     ");
+  if(currentTarget == 1) lcd.print(" CENTRO!  ^     ");
+  if(currentTarget == 2) lcd.print("DIREITA!  >     ");
+  
+  digitalWrite(ledPins[currentTarget], HIGH); 
+  tone(speakerPin, 1500, 150); 
+  startTime = millis();
+}
+
+void checkReflexes() {
+  for (int i = 0; i < numTargets; i++) {
+    // Se algum botão for premido...
+    if (digitalRead(btnPins[i]) == LOW) {
+      reactionTime = millis() - startTime;
+      digitalWrite(ledPins[currentTarget], LOW); // Apaga LED
+      
+      if (i == currentTarget) processRoundResult(true);  // Acertou
+      else processRoundResult(false);                   // Falhou
+    }
+  }
+}
+
+void processRoundResult(boolean success) {
+  lcd.clear();
+  if (success) {
+    // Cálculo: Base 1000 - Tempo
+    if (reactionTime > 1000) roundScore = 0;
+    else roundScore = 1000 - reactionTime;
+    
+    // Som de sucesso
+    if(roundScore > 800) { tone(speakerPin, 1000, 80); delay(80); tone(speakerPin, 2000, 150); }
+    else { tone(speakerPin, 800, 100); }
+    
+    lcd.setCursor(0, 0); lcd.print("TOP! "); lcd.print(reactionTime); lcd.print("ms");
+  } else {
+    // Errou o botão
+    roundScore = -200; 
+    tone(speakerPin, 100, 300); 
+    lcd.setCursor(0, 0); lcd.print("ERRADO!");
+  }
+  
+  totalGameScore += roundScore;
+  lcd.setCursor(0, 1);
+  lcd.print("Score: "); lcd.print(totalGameScore);
+  
+  gameState = 3; 
+}
+
+// ===================== MENU E NAVEGAÇÃO =====================
+
+void handleMenu() {
+    int joyY = analogRead(joyYPin);
+    int joyX = analogRead(joyXPin);
+    
+    // Navegação Vertical (Cima/Baixo)
+    if (millis() - lastNavTime > 200) {
+      if (joyY < 100 && menuOption > 0) { 
+        menuOption--; tone(speakerPin, 1000, 20); lastNavTime = millis(); drawMenu();
+      }
+      if (joyY > 900 && menuOption < 2) { 
+        menuOption++; tone(speakerPin, 1000, 20); lastNavTime = millis(); drawMenu();
+      }
+      
+      // Configuração Rondas (Esquerda/Direita) - Só na Opção 1
+      if (menuOption == 1) {
+        if (joyX > 900) { // Direita
+          totalRounds++; if(totalRounds>99) totalRounds=99; 
+          tone(speakerPin, 1200, 20); lastNavTime=millis(); drawMenu(); 
+        }
+        if (joyX < 100) { // Esquerda
+          totalRounds--; if(totalRounds<1) totalRounds=1; 
+          tone(speakerPin, 800, 20); lastNavTime=millis(); drawMenu(); 
+        }
+      }
+    }
+
+    // Seleção (Click no Joystick)
+    if (digitalRead(joySwitch) == LOW) {
+      tone(speakerPin, 1800, 50); delay(100); tone(speakerPin, 2000, 100);
+      if (menuOption == 0) startNewGame();
+      else if (menuOption == 1) startNewGame(); // Também começa se clicar nas rondas
+      else showHighScore();
+      delay(500);
+    }
+}
+
+void drawMenu() {
+  lcd.clear();
+  
+  // Lógica de Scroll: Mostra sempre 2 linhas
+  int startItem = 0;
+  if (menuOption == 2) startItem = 1;
+  
+  for(int i=0; i<2; i++) {
+    int itemIndex = startItem + i;
+    lcd.setCursor(1, i);
+    
+    if (itemIndex == 0) {
+       lcd.write(byte(0)); lcd.print(" INICIAR");
+    }
+    else if (itemIndex == 1) {
+       lcd.write(byte(3)); // Relogio
+       lcd.print(" RONDAS: <"); lcd.print(totalRounds); lcd.print(">");
+    }
+    else if (itemIndex == 2) {
+       lcd.write(byte(1)); lcd.print(" RECORDE");
+    }
+  }
+
+  // Desenhar Seta
+  lcd.setCursor(0, menuOption - startItem); 
+  lcd.write(byte(2)); 
+}
+
+// ===================== UTILITÁRIOS =====================
+
+void introAnimation() {
+  lcd.clear(); lcd.setCursor(2, 0); lcd.print("REFLEX MASTER");
+  lcd.setCursor(4, 1); lcd.print("PRO v2.0");
+  for(int k=0; k<2; k++) {
+    for(int i=0; i<3; i++) digitalWrite(ledPins[i], HIGH);
+    tone(speakerPin, 400+(k*200), 100); delay(100);
+    for(int i=0; i<3; i++) digitalWrite(ledPins[i], LOW);
+    delay(100);
+  }
+}
+
+void showHighScore() {
+  gameState = 5; lcd.clear();
+  lcd.setCursor(0, 0); lcd.write(byte(1)); lcd.print(" HALL OF FAME "); lcd.write(byte(1));
+  lcd.setCursor(4, 1); lcd.print(highScore); lcd.print(" pts");
+}
+
+void cancelGame() {
+  gameState = 0;
+  for(int i=0; i<3; i++) digitalWrite(ledPins[i], LOW);
+  lcd.clear(); lcd.print("CANCELADO");
+  tone(speakerPin, 100, 400); delay(1500);
+  lastMenuOption = -1; drawMenu();
+}
+
+void gameOver() {
+  gameState = 4; lcd.clear();
+  if (totalGameScore > highScore) {
+    highScore = totalGameScore;
+    lcd.setCursor(1,0); lcd.write(byte(1)); lcd.print(" RECORDE! "); lcd.write(byte(1));
+    lcd.setCursor(4, 1); lcd.print(highScore);
+    tone(speakerPin, 523, 150); delay(150); tone(speakerPin, 659, 150); delay(150);
+    tone(speakerPin, 784, 150); delay(150); tone(speakerPin, 1046, 600); 
+  } else {
+    lcd.print("  FIM DO JOGO  ");
+    lcd.setCursor(2, 1); lcd.print("Total: "); lcd.print(totalGameScore);
+    tone(speakerPin, 300, 600); 
+  }
+}
