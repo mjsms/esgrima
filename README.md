@@ -1,6 +1,9 @@
-# Reflex Master PRO v2.0
+# Reflex Master PRO v2.0 (Project: ReflexMasterPro)
 
 **Reflex Master PRO v2.0** is an Arduino-based reaction time training game designed to help fencers (and anyone else!) improve their reflexes. It features a menu system, multiple game rounds, high score tracking, and audio-visual feedback.
+
+> [!NOTE]
+> This project was formerly named `esgrima`. The main sketch file is now `ReflexMasterPro.ino`. Please ensure the parent folder is also named `ReflexMasterPro` for the Arduino IDE to open it correctly.
 
 ## Hardware Setup
 
